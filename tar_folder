@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+RESET='\033[0m'
+
+# Function implementation
+tar_folder() {
+  local folder="$1"
+  local output_file="$2"
+  local dry_run=false
+  local verbose=false
+  local quiet=false
+  local recursive=false
+  local file_extensions=()
+  local exclude_patterns=()
+  local include_patterns=()
+  shift 2
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --exclude=*)
+        IFS=',' read -ra patterns <<< "${1#*=}"
+        exclude_patterns+=("${patterns[@]}")
+        shift
+        ;;
+      --include=*)
+        IFS=',' read -ra patterns <<< "${1#*=}"
+        include_patterns+=("${patterns[@]}")
+        shift
+        ;;
+      --recursive|-r)
+        recursive=true
+        shift
+        ;;
+      --dry-run|-n)
+        dry_run=true
+        shift
+        ;;
+      --verbose|-v)
+        verbose=true
+        shift
+        ;;
+      --quiet|-q)
+        quiet=true
+        shift
+        ;;
+      --help|-h)
+        echo -e "${CYAN}Usage: tar_folder <folder> [output_file] [options] [file_extensions...]${RESET}"
+        echo -e "${CYAN}Options:${RESET}"
+        echo -e "  ${YELLOW}--exclude=<patterns>${RESET}    Exclude files or directories matching the patterns (comma-separated)"
+        echo -e "  ${YELLOW}--include=<patterns>${RESET}    Include files or directories matching the patterns (comma-separated)"
+        echo -e "  ${YELLOW}--recursive, -r${RESET}         Enable recursive inclusion/exclusion"
+        echo -e "  ${YELLOW}--dry-run, -n${RESET}           Perform a dry run without creating the archive"
+        echo -e "  ${YELLOW}--verbose, -v${RESET}           Enable verbose output"
+        echo -e "  ${YELLOW}--quiet, -q${RESET}             Enable quiet mode (suppress non-essential output)"
+        echo -e "  ${YELLOW}--help, -h${RESET}              Show this help message"
+        echo -e "${CYAN}File Extensions:${RESET}"
+        echo -e "  ${YELLOW}[file_extensions...]${RESET}    Optional. Specific file extensions to include (e.g., .py .js .tsx)"
+        return 0
+        ;;
+      --version)
+        echo -e "${BLUE}tar_folder version 1.0.0${RESET}"
+        return 0
+        ;;
+      *)
+        file_extensions+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$folder" ]; then
+    echo -e >&2 "${RED}Usage: tar_folder <folder> [output_file] [options] [file_extensions...]${RESET}"
+    return 1
+  fi
+
+  if [ ! -d "$folder" ]; then
+    echo -e >&2 "${RED}Error: $folder is not a valid directory${RESET}"
+    return 1
+  fi
+
+  if [ -z "$output_file" ]; then
+    output_file="$(basename "$folder").tar"
+  fi
+
+  local exclude_opts=""
+  local include_opts=""
+
+  for pattern in "${exclude_patterns[@]}"; do
+    exclude_opts+=" --exclude=\"$pattern\""
+  done
+
+  for pattern in "${include_patterns[@]}"; do
+    include_opts+=" --include=\"$pattern\""
+  done
+
+  if [ ${#file_extensions[@]} -gt 0 ]; then
+    for ext in "${file_extensions[@]}"; do
+      include_opts+=" --include=\"*$ext\""
+    done
+    exclude_opts+=" --exclude=\"*\""
+  fi
+
+  if $recursive; then
+    exclude_opts+=" --exclude-vcs --exclude-vcs-ignores"
+    include_opts+=" --recursion"
+  fi
+
+  if $verbose; then
+    echo -e "${GREEN}Creating tar archive:${RESET} $output_file"
+    echo -e "${GREEN}Including files from:${RESET} $folder"
+    echo -e "${GREEN}Exclude patterns:${RESET} ${exclude_patterns[*]}"
+    echo -e "${GREEN}Include patterns:${RESET} ${include_patterns[*]}"
+    echo -e "${GREEN}File extensions:${RESET} ${file_extensions[*]}"
+    echo -e "${GREEN}Recursive mode:${RESET} $recursive"
+  fi
+
+  local tar_command="tar -cf \"$output_file\""
+  if ! $quiet; then
+    tar_command+=" -v"
+  fi
+  tar_command+=" -C \"$folder\" $exclude_opts $include_opts ."
+
+  if $dry_run; then
+    echo -e "${MAGENTA}Dry run:${RESET} $tar_command"
+  else
+    eval "$tar_command"
+
+    local dir_structure_file="dir_structure.txt"
+    echo "Directory Structure:" > "$dir_structure_file"
+    echo "-------------------" >> "$dir_structure_file"
+    tree -a -I ".git" "$folder" | sed 's/^/├── /' >> "$dir_structure_file"
+    tar -rf "$output_file" "$dir_structure_file"
+    rm "$dir_structure_file"
+
+    if ! $quiet; then
+      echo -e "${CYAN}Tar file created:${RESET} $output_file"
+      echo -e "${CYAN}Directory Structure:${RESET}"
+      echo "-------------------"
+      tree -a -I ".git" "$folder" | sed 's/^/├── /'
+    fi
+  fi
+}
+
+# Check if the script is being sourced
+if [[ "$0" == "${BASH_SOURCE[0]}" ]]; then
+  # Script is being executed directly
+  tar_folder "$@"
+else
+  # Script is being sourced
+  echo -e >&2 "${RED}Error: This script must be executed directly, not sourced.${RESET}"
+  return 1
+fi
