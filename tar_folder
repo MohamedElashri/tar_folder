@@ -16,8 +16,6 @@ tar_folder() {
   local dry_run=false
   local verbose=false
   local quiet=false
-  local recursive=false
-  local file_extensions=()
   local exclude_patterns=()
   local include_patterns=()
   shift 2
@@ -34,10 +32,6 @@ tar_folder() {
         include_patterns+=("${patterns[@]}")
         shift
         ;;
-      --recursive|-r)
-        recursive=true
-        shift
-        ;;
       --dry-run|-n)
         dry_run=true
         shift
@@ -51,32 +45,29 @@ tar_folder() {
         shift
         ;;
       --help|-h)
-        echo -e "${CYAN}Usage: tar_folder <folder> [output_file] [options] [file_extensions...]${RESET}"
+        echo -e "${CYAN}Usage: tar_folder <folder> [output_file] [options]${RESET}"
         echo -e "${CYAN}Options:${RESET}"
         echo -e "  ${YELLOW}--exclude=<patterns>${RESET}    Exclude files or directories matching the patterns (comma-separated)"
         echo -e "  ${YELLOW}--include=<patterns>${RESET}    Include files or directories matching the patterns (comma-separated)"
-        echo -e "  ${YELLOW}--recursive, -r${RESET}         Enable recursive inclusion/exclusion"
         echo -e "  ${YELLOW}--dry-run, -n${RESET}           Perform a dry run without creating the archive"
         echo -e "  ${YELLOW}--verbose, -v${RESET}           Enable verbose output"
         echo -e "  ${YELLOW}--quiet, -q${RESET}             Enable quiet mode (suppress non-essential output)"
         echo -e "  ${YELLOW}--help, -h${RESET}              Show this help message"
-        echo -e "${CYAN}File Extensions:${RESET}"
-        echo -e "  ${YELLOW}[file_extensions...]${RESET}    Optional. Specific file extensions to include (e.g., .py .js .tsx)"
         return 0
         ;;
       --version)
-        echo -e "${BLUE}tar_folder version 1.0.0${RESET}"
+        echo -e "${BLUE}tar_folder version 1.0.8${RESET}"
         return 0
         ;;
       *)
-        file_extensions+=("$1")
-        shift
+        echo -e "${RED}Unknown option: $1${RESET}"
+        return 1
         ;;
     esac
   done
 
   if [ -z "$folder" ]; then
-    echo -e >&2 "${RED}Usage: tar_folder <folder> [output_file] [options] [file_extensions...]${RESET}"
+    echo -e >&2 "${RED}Usage: tar_folder <folder> [output_file] [options]${RESET}"
     return 1
   fi
 
@@ -93,63 +84,61 @@ tar_folder() {
     fi
   fi
 
-  local exclude_opts=""
-  local include_opts=""
+  # Check if the folder is a git repository
+  if [ -d "$folder/.git" ]; then
+    local git_ls_files="git -C \"$folder\" ls-files --cached --others --exclude-standard"
+  else
+    local git_ls_files="find \"$folder\" -type f"
+  fi
+
+  local file_list_cmd="$git_ls_files"
+  
+  if [ ${#include_patterns[@]} -gt 0 ]; then
+    file_list_cmd+=" | grep -E '$(IFS='|'; echo "${include_patterns[*]}")'"
+  fi
 
   for pattern in "${exclude_patterns[@]}"; do
-    exclude_opts+=" --exclude=\"$pattern\""
+    file_list_cmd+=" | grep -v \"$pattern\""
   done
 
-  for pattern in "${include_patterns[@]}"; do
-    include_opts+=" --include=\"$pattern\""
-  done
+  file_list_cmd+=" | grep -v '^\.git/'"
 
-  if [ ${#file_extensions[@]} -gt 0 ]; then
-    for ext in "${file_extensions[@]}"; do
-      if [ -n "$ext" ]; then
-        include_opts+=" --include=\"*$ext\""
-      fi
-    done
-    exclude_opts+=" --exclude=\"*\""
+  local tar_cmd="tar -cf \"$output_file\" --exclude-vcs --exclude-vcs-ignores"
+  if ! $quiet; then
+    tar_cmd+=" -v"
   fi
-  
-  if $recursive; then
-    exclude_opts+=" --exclude-vcs --exclude-vcs-ignores"
-    include_opts+=" --recursion"
-  fi
+  tar_cmd+=" -C \"$folder\" -T -"
 
   if $verbose; then
     echo -e "${GREEN}Creating tar archive:${RESET} $output_file"
     echo -e "${GREEN}Including files from:${RESET} $folder"
     echo -e "${GREEN}Exclude patterns:${RESET} ${exclude_patterns[*]}"
     echo -e "${GREEN}Include patterns:${RESET} ${include_patterns[*]}"
-    echo -e "${GREEN}File extensions:${RESET} ${file_extensions[*]}"
-    echo -e "${GREEN}Recursive mode:${RESET} $recursive"
+    echo -e "${GREEN}File list command:${RESET} $file_list_cmd"
+    echo -e "${GREEN}Tar command:${RESET} $tar_cmd"
   fi
-
-  local tar_command="tar -cf \"$output_file\""
-  if ! $quiet; then
-    tar_command+=" -v"
-  fi
-  tar_command+=" -C \"$folder\" $exclude_opts $include_opts ."
 
   if $dry_run; then
-    echo -e "${MAGENTA}Dry run:${RESET} $tar_command"
+    echo -e "${MAGENTA}Dry run:${RESET} $file_list_cmd | $tar_cmd"
   else
-    eval "$tar_command"
+    # Create the tar archive
+    eval "$file_list_cmd" | eval "$tar_cmd"
 
+    # Create dir_structure.txt
     local dir_structure_file="dir_structure.txt"
     echo "Directory Structure:" > "$dir_structure_file"
     echo "-------------------" >> "$dir_structure_file"
-    tree -a -I ".git" "$folder" | sed 's/^/├── /' >> "$dir_structure_file"
-    tar -rf "$output_file" "$dir_structure_file"
+    eval "$file_list_cmd" | sort | sed 's/^/├── /' >> "$dir_structure_file"
+    
+    # Add dir_structure.txt to the tar archive
+    tar -rf "$output_file" -C "$(dirname "$dir_structure_file")" "$(basename "$dir_structure_file")"
     rm "$dir_structure_file"
 
     if ! $quiet; then
       echo -e "${CYAN}Tar file created:${RESET} $output_file"
-      echo -e "${CYAN}Directory Structure:${RESET}"
-      echo "-------------------"
-      tree -a -I ".git" "$folder" | sed 's/^/├── /'
+      echo -e "${CYAN}Files included:${RESET}"
+      eval "$file_list_cmd" | sort | sed 's/^/├── /'
+      echo -e "${CYAN}Directory structure added to:${RESET} $dir_structure_file (included in the tar file)"
     fi
   fi
 }
@@ -161,5 +150,5 @@ if [[ "$0" == "${BASH_SOURCE[0]}" ]]; then
 else
   # Script is being sourced
   echo -e >&2 "${RED}Error: This script must be executed directly, not sourced.${RESET}"
-  return 1
+  exit 1
 fi
