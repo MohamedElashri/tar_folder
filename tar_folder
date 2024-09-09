@@ -86,7 +86,11 @@ tar_folder() {
   fi
 
   if [ -z "$output_file" ]; then
-    output_file="$(basename "$folder").tar"
+    if [ "$folder" = "." ]; then
+      output_file="$(basename "$(pwd)").tar"
+    else
+      output_file="$(basename "$folder").tar"
+    fi
   fi
 
   local exclude_opts=""
@@ -102,11 +106,13 @@ tar_folder() {
 
   if [ ${#file_extensions[@]} -gt 0 ]; then
     for ext in "${file_extensions[@]}"; do
-      include_opts+=" --include=\"*$ext\""
+      if [ -n "$ext" ]; then
+        include_opts+=" --include=\"*$ext\""
+      fi
     done
     exclude_opts+=" --exclude=\"*\""
   fi
-
+  
   if $recursive; then
     exclude_opts+=" --exclude-vcs --exclude-vcs-ignores"
     include_opts+=" --recursion"
